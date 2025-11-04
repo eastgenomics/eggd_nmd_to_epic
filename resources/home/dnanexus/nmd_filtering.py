@@ -154,7 +154,7 @@ class NMDProcessor:
         """
         for file in excluded_regions_file:
             file_id = file['id']
-            content = dxpy.DXFile(file_id).read().strip().splitlines()
+            content = dxpy.open_dxfile(file_id, mode='rb').read().strip().splitlines()
             if len(content) > 1:
                 print(f"{file['describe']['name']} contains excluded regions.")
                 return None
@@ -181,6 +181,24 @@ class NMDProcessor:
         return {
             name: details for name, details in report_details.items()
             if details['clinical_indication'] not in excluded
+        }
+
+    @staticmethod
+    def get_reports_with_no_variants(report_details):
+        """
+        Finds reports with no SNV and CNV variants.
+        Parameters
+        ----------
+        report_details : dict
+            dictionary of report details.
+        Returns
+        -------
+        dict
+            Dictionary of reports with no SNV and CNV variants.
+        """
+        return {
+            name: details for name, details in report_details.items()
+            if details.get('variants', 0) == 0 and details.get('report_type') in ['SNV', 'CNV']
         }
 
 # Main processing loop
