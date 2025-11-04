@@ -164,7 +164,7 @@ class NMDProcessor:
     @staticmethod
     def filter_overrepresented_indications(report_details, threshold=2):
         """
-        Filters out clinical indications that are overrepresented in the report details.
+        Filters out samples with >2 clinical indications in report details.
         Parameters
         ----------
         report_details : dict
