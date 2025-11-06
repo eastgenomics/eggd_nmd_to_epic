@@ -223,7 +223,7 @@ class NMDProcessor:
         for file in athena_summary_file:
             file_id = file['id']
             file_name = file['describe']['name']
-            content = dxpy.DXFile(file_id).read().strip().splitlines()
+            content = dxpy.open_dxfile(file_id, mode='rb').read().strip().splitlines()
             athena_reports[file_name] = {
                 "file_id": file_id,
                 "content": content
