@@ -62,10 +62,11 @@ class NMDProcessor:
             dictionary containing report information.
         project : dict
             dictionary containing project information.
+
         Returns
         -------
         report_details : dict
-            dictionary with extracted report details for SNVs and CNV reports.
+            Extracted report details for SNVs and CNV reports.
         """
         report_name = report['describe']['name']
         details = dxpy.bindings.dxdataobject_functions.get_details(report['describe']['id'])
@@ -95,10 +96,11 @@ class NMDProcessor:
         ----------
         report_details : dict
             dictionary containing report details.
+
         Returns
         -------
         dict or None
-            dictionary of CNV reports or None if no CNV reports found.
+            CNV reports or None if no CNV reports found.
         """
         cnv_reports = {
             name: details for name, details in report_details.items()
@@ -126,7 +128,7 @@ class NMDProcessor:
         Returns
         -------
         valid_reports : dict
-            Dictionary of empty CNV reports.
+            Empty CNV reports.
         """
         valid_reports = {}
         for name, details in cnv_reports.items():
@@ -147,6 +149,7 @@ class NMDProcessor:
         ----------
         excluded_regions_file : list
             List of excluded regions files.
+
         Returns
         -------
         list or None
@@ -162,7 +165,7 @@ class NMDProcessor:
         return excluded_regions_file
 
     @staticmethod
-    def filter_overrepresented_indications(report_details, threshold=2):
+    def filter_overreported_samples(report_details, threshold=2):
         """
         Filters out samples with >2 clinical indications in report details.
         Parameters
@@ -171,6 +174,7 @@ class NMDProcessor:
             dictionary of report details.
         threshold : int
             Threshold for number of clinical indicatiods
+
         Returns
         -------
         dict
@@ -191,23 +195,121 @@ class NMDProcessor:
         ----------
         report_details : dict
             dictionary of report details.
+
         Returns
         -------
         dict
-            Dictionary of reports with no SNV and CNV variants.
+            Reports with no SNV and CNV variants.
         """
         return {
             name: details for name, details in report_details.items()
             if details.get('variants', 0) == 0 and details.get('report_type') in ['SNV', 'CNV']
         }
 
+    @staticmethod
+    def get_athena_report(athena_summary_file):
+        """
+        Finds Athena summary files and gets summary information.
+        Parameters
+        ----------
+        athena_summary_file : list
+            List of Athena summary files.
+        Returns
+        -------
+        athena_reports : dict
+            Athena report details.
+        """
+        athena_reports = {}
+        for file in athena_summary_file:
+            file_id = file['id']
+            file_name = file['describe']['name']
+            content = dxpy.DXFile(file_id).read().strip().splitlines()
+            athena_reports[file_name] = {
+                "file_id": file_id,
+                "content": content
+            }
+            print(f"Processed Athena report: {file_name}")
+        return athena_reports
+
+    @staticmethod
+    def match_athena_summary(sample, athena_reports):
+        """
+        Matches Athena summary files by sample name.
+        Parameters
+        ----------
+        sample : str
+            Sample to do matching by.
+        athena_reports : dict
+            Athena reports to match from
+
+        Returns
+        -------
+        list
+            Matched Athena summary or empty list.
+        """
+        for filename, data in athena_reports.items():
+            if sample in filename:
+                return data.get("content", [])
+        return []
+
+    @staticmethod
+    def gather_output(filtered_reports, athena_reports):
+        """
+        Generates output by merging reports and matching Athena summaries.
+        Parameters
+        ----------
+        filtered_reports : dict
+            Filtered report details.
+        athena_reports : dict
+            Athena report details.
+
+        Returns
+        -------
+        list
+            Final output variant reports with matching athena summary.
+        """
+        final_output = []
+        for report_name, details in filtered_reports.items():
+            sample = details['sample']
+
+            output = {
+                "report_name": report_name,
+                "sample": sample,
+                "project": details['project'],
+                "assay": details['assay'],
+                "clinical_indication": details['clinical_indication'],
+                "report_type": details['report_type'],
+                "variants": details['variants'],
+                "athena_summary": athena_summary_file
+                }
+            final_output.append(output)
+        return final_output
+
 # Main processing loop
 all_report_details = {}
 
 for proj in projects:
-    files = list(dxpy.bindings.search.find_data_objects(classname='file', project=proj['id'], name="^.*NV_\\d+\\.xlsx$", name_mode='regexp', describe=True))
-    athena_summary_file = list(dxpy.bindings.search.find_data_objects(classname='file', project=proj['id'], name="^.*1_summary\\.txt$", name_mode='regexp', describe=True))
-    excluded_regions_file = list(dxpy.bindings.search.find_data_objects(classname='file', project=proj['id'], name="^.*excluded_intervals.*b38\\.tsv$", name_mode='regexp', describe=True))
+    files = list(
+        dxpy.bindings.search.find_data_objects(
+            classname='file',
+            project=proj['id'],
+            name="^.*NV_\\d+\\.xlsx$",
+            name_mode='regexp',
+            describe=True))
+    athena_summary_file = list(
+        dxpy.bindings.search.find_data_objects(
+            classname='file',
+            project=proj['id'],
+            name="^.*1_summary\\.txt$",
+            name_mode='regexp',
+            describe=True))
+    excluded_regions_file = list(
+        dxpy.bindings.search.find_data_objects(
+            classname='file',
+            project=proj['id'],
+            name="^.*excluded_intervals.*b38\\.tsv$",
+            name_mode='regexp',
+            describe=True))
 
     print(f"Found {len(files)} reports in project {proj['name']} ({proj['id']})")
 
