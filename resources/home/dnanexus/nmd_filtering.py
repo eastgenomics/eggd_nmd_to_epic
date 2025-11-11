@@ -233,7 +233,6 @@ class NMDProcessor:
                 "file_id": file_id,
                 "content": content
             }
-            print(f"Extracted Athena report: {file_name}")
         return athena_reports
 
     @staticmethod
