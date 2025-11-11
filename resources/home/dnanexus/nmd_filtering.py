@@ -1,15 +1,30 @@
 import dxpy
 import concurrent.futures
 import json
+import re
+import pandas as pd
+import io
 from collections import Counter
+
 
 # Define current project as current workspace
 current_project_id = dxpy.WORKSPACE_ID
 current_project = dxpy.api.project_describe(current_project_id)
 projects = [current_project]
 
+
 # Class for NMD processing
 class NMDProcessor:
+    """
+    Class for processing NMD reports and filtering based on following criteria:
+    - Evaluate if CNV=0 and check excluded regions=0
+    - Ignore patients with more than 2 clinical indications
+    - Ignore samples where there is no CNV report
+    - Extracted reports must have no CNV and SNV variants
+
+    Reports found will be matched to Athena summary files and report outputs written
+    in JSON format.
+    """
     @staticmethod
     def call_in_parallel(func, items, ignore_missing=False, **kwargs):
         """
@@ -46,9 +61,9 @@ class NMDProcessor:
                 except Exception as exc:
                     item = futures[future]
                     if ignore_missing and isinstance(exc, dxpy.exceptions.ResourceNotFound):
-                        print(f"WARNING: {item} not found, skipping.")
+                        print(f"{item} not found.")
                         continue
-                    print(f"Error getting data for {item}: {exc}")
+                    print(f"Error for getting data from {item}: {exc}")
                     raise exc
         return results
 
@@ -89,7 +104,7 @@ class NMDProcessor:
     @staticmethod
     def handle_no_cnv_reports(report_details):
         """
-        Handles the case where no CNV reports are found in the report details.
+        Handles cases where no CNV reports are found in the report details.
         No CNV reports will return None.
 
         Parameters
@@ -112,7 +127,7 @@ class NMDProcessor:
         return cnv_reports
 
     @staticmethod
-    def filter_valid_cnv_reports(cnv_reports, excluded_regions_file):
+    def filter_valid_cnv_reports(cnv_reports):
         """
         Filters CNV reports to include only those that are valid based on
         excluded regions. If CNV report has no variants, these reports will
@@ -122,47 +137,35 @@ class NMDProcessor:
         ----------
         cnv_reports : dict
             Dictionary of CNV reports.
-        excluded_regions_file : list
-            List of excluded regions files.
 
         Returns
         -------
         valid_reports : dict
-            Empty CNV reports.
+            CNV reports with no variants and excluded regions.
         """
         valid_reports = {}
-        for name, details in cnv_reports.items():
-            if details.get('variants', 0) == 0:
-                print(f"CNV report {name} has 0 variants.")
-                if NMDProcessor.check_excluded_regions_file(excluded_regions_file):
-                    valid_reports[name] = details
-                else:
-                    print(f"Excluded regions was more than 1 for {name}. Skipping.")
+
+        for name, report in cnv_reports.items():
+            if report.get("variants", 0) == 0:
+                print(f"Checking CNV report: {name}")
+                file_id = report.get("id")
+                if not file_id:
+                    print(f"No file ID found for report: {name}")
+                    continue
+
+            try:
+                with dxpy.open_dxfile(file_id, mode='rb') as f:
+                    content = f.read()
+                    xls = pd.ExcelFile(io.BytesIO(content))
+                    if "ExcludedRegions" in xls.sheet_names:
+                        df = xls.parse("ExcludedRegions")
+                        if not df.empty and len(df.columns) > 0:
+                            valid_reports[name] = report
+            except Exception as e:
+                print(f"Error processing CNV report {name}: {e}")
+
+        print(f"Valid CNV reports found: {len(valid_reports)}")
         return valid_reports
-
-    @staticmethod
-    def check_excluded_regions_file(excluded_regions_file):
-        """
-        Checks the excluded regions file to determine if it contains
-        excluded regions beyond the header.
-        Parameters
-        ----------
-        excluded_regions_file : list
-            List of excluded regions files.
-
-        Returns
-        -------
-        list or None
-            Returns the excluded regions file if valid, otherwise None.
-        """
-        for file in excluded_regions_file:
-            file_id = file['id']
-            content = dxpy.open_dxfile(file_id, mode='rb').read().strip().splitlines()
-            if len(content) > 1:
-                print(f"{file['describe']['name']} contains excluded regions.")
-                return None
-        print("Excluded regions file has only header. Proceeding.")
-        return excluded_regions_file
 
     @staticmethod
     def filter_overreported_samples(report_details, threshold=2):
@@ -223,34 +226,15 @@ class NMDProcessor:
         for file in athena_summary_file:
             file_id = file['id']
             file_name = file['describe']['name']
-            content = dxpy.open_dxfile(file_id, mode='rb').read().strip().splitlines()
-            athena_reports[file_name] = {
+            sample_name = file_name.split('_')[0].strip().lower()
+            raw_content = dxpy.open_dxfile(file_id, mode='rb').read().strip().splitlines()
+            content = [line.decode('utf-8') for line in raw_content]
+            athena_reports[sample_name] = {
                 "file_id": file_id,
                 "content": content
             }
-            print(f"Processed Athena report: {file_name}")
+            print(f"Extracted Athena report: {file_name}")
         return athena_reports
-
-    @staticmethod
-    def match_athena_summary(sample, athena_reports):
-        """
-        Matches Athena summary files by sample name.
-        Parameters
-        ----------
-        sample : str
-            Sample to do matching by.
-        athena_reports : dict
-            Athena reports to match from
-
-        Returns
-        -------
-        list
-            Matched Athena summary or empty list.
-        """
-        for filename, data in athena_reports.items():
-            if sample in filename:
-                return data.get("content", [])
-        return []
 
     @staticmethod
     def gather_output(filtered_reports, athena_reports):
@@ -266,63 +250,78 @@ class NMDProcessor:
         Returns
         -------
         list
-            Final output variant reports with matching athena summary.
+            Final output variant reports with matching athena summary
+            for NMD cases only.
         """
         final_output = []
         for report_name, details in filtered_reports.items():
             sample = details['sample']
+            sample_key = sample.strip().lower()
+            athena_summary = athena_reports.get(sample_key)
 
             output = {
                 "report_name": report_name,
                 "sample": sample,
+                "Epic-InstrumentID" : sample.split('-')[0],
+                "Epic-SpecimenID" : sample.split('-')[1],
+                "Epic-BatchID" : sample.split('-')[2],
                 "project": details['project'],
                 "assay": details['assay'],
                 "clinical_indication": details['clinical_indication'],
                 "report_type": details['report_type'],
                 "variants": details['variants'],
-                "athena_summary": athena_summary_file
-                }
+                "athena_summary": athena_summary
+            }
             final_output.append(output)
         return final_output
 
 # Main processing loop
 all_report_details = {}
 
-for proj in projects:
-    files = list(
-        dxpy.bindings.search.find_data_objects(
-            classname='file',
-            project=proj['id'],
-            name="^.*NV_\\d+\\.xlsx$",
-            name_mode='regexp',
-            describe=True))
-    athena_summary_file = list(
-        dxpy.bindings.search.find_data_objects(
-            classname='file',
-            project=proj['id'],
-            name="^.*1_summary\\.txt$",
-            name_mode='regexp',
-            describe=True))
-    excluded_regions_file = list(
-        dxpy.bindings.search.find_data_objects(
-            classname='file',
-            project=proj['id'],
-            name="^.*excluded_intervals.*b38\\.tsv$",
-            name_mode='regexp',
-            describe=True))
+def main():
+    for proj in projects:
+        files = list(
+            dxpy.bindings.search.find_data_objects(
+                classname='file',
+                project=proj['id'],
+                name="^.*NV_\\d+\\.xlsx$",
+                name_mode='regexp',
+                describe=True))
+        athena_summary_file = list(
+            dxpy.bindings.search.find_data_objects(
+                classname='file',
+                project=proj['id'],
+                name="^.*1_summary\\.txt$",
+                name_mode='regexp',
+                describe=True))
 
-    print(f"Found {len(files)} reports in project {proj['name']} ({proj['id']})")
+        print(f"Found {len(files)} reports in project {proj['name']} ({proj['id']})")
 
-    report_details = NMDProcessor.call_in_parallel(
-        func=NMDProcessor.get_report_details,
-        items=files,
-        project=proj
-    )
-    report_details = {k: v for report in report_details for k, v in report.items()}
-    all_report_details.update(report_details)
+        report_details = NMDProcessor.call_in_parallel(
+            func=NMDProcessor.get_report_details,
+            items=files,
+            project=proj
+        )
+        # Get all report details
+        report_details = {k: v for report in report_details for k, v in report.items()}
+        all_report_details.update(report_details)
+        # Get cases with CNV reports
+        cnv_reports = NMDProcessor.handle_no_cnv_reports(report_details)
+        if not cnv_reports:
+            continue
+        # Get CNV reports with no excluded regions
+        valid_cnv_reports = NMDProcessor.filter_valid_cnv_reports(cnv_reports)
+        # Get reports with <=2 clinical indications
+        filtered_reports = NMDProcessor.filter_overreported_samples(valid_cnv_reports)
+        # Get reports with no CNV and SNV variants
+        no_variant_reports = NMDProcessor.get_reports_with_no_variants(filtered_reports)
+        # Get Athena summary reports
+        athena_reports = NMDProcessor.get_athena_report(athena_summary_file)
+        # Create final output
+        final_output = NMDProcessor.gather_output(no_variant_reports, athena_reports)
+        # Print final output in json format
+        for output in final_output:
+            print (json.dumps(output, indent = 4))
 
-    cnv_reports = NMDProcessor.handle_no_cnv_reports(report_details)
-    if not cnv_reports:
-        continue
-
-    valid_cnv_reports = NMDProcessor.filter_valid_cnv_reports(cnv_reports, excluded_regions_file)
+if __name__ == "__main__":
+    main()
