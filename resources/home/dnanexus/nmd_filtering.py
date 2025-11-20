@@ -310,7 +310,6 @@ def main():
         # Get CNV reports with no excluded regions
         valid_cnv_reports = NMDProcessor.filter_valid_cnv_reports(cnv_reports)
         # Merge validated CNV reports back with all reports
-        # Keep SNV reports and replace CNV reports with validated ones
         merged_reports = {
             name: details for name, details in report_details.items()
             if details.get('report_type') == 'SNV' or name in valid_cnv_reports
