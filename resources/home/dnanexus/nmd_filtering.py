@@ -153,16 +153,16 @@ class NMDProcessor:
                     print(f"No file ID found for report: {name}")
                     continue
 
-            try:
-                with dxpy.open_dxfile(file_id, mode='rb') as f:
-                    content = f.read()
-                    xls = pd.ExcelFile(io.BytesIO(content))
-                    if "ExcludedRegions" in xls.sheet_names:
-                        df = xls.parse("ExcludedRegions")
-                        if not df.empty and len(df.columns) > 0:
-                            valid_reports[name] = report
-            except Exception as e:
-                print(f"Error processing CNV report {name}: {e}")
+                try:
+                    with dxpy.open_dxfile(file_id, mode='rb') as f:
+                        content = f.read()
+                        xls = pd.ExcelFile(io.BytesIO(content))
+                        if "ExcludedRegions" in xls.sheet_names:
+                            df = xls.parse("ExcludedRegions")
+                            if not df.empty and len(df.columns) > 0:
+                                valid_reports[name] = report
+                except Exception as e:
+                    print(f"Error processing CNV report {name}: {e}")
 
         print(f"Valid CNV reports found: {len(valid_reports)}")
         return valid_reports
@@ -176,7 +176,7 @@ class NMDProcessor:
         report_details : dict
             dictionary of report details.
         threshold : int
-            Threshold for number of clinical indicatiods
+            Threshold for number of clinical indications
 
         Returns
         -------
@@ -303,15 +303,20 @@ def main():
         )
         # Get all report details
         report_details = {k: v for report in report_details for k, v in report.items()}
-        all_report_details.update(report_details)
         # Get cases with CNV reports
         cnv_reports = NMDProcessor.handle_no_cnv_reports(report_details)
         if not cnv_reports:
             continue
         # Get CNV reports with no excluded regions
         valid_cnv_reports = NMDProcessor.filter_valid_cnv_reports(cnv_reports)
-        # Get reports with <=2 clinical indications
-        filtered_reports = NMDProcessor.filter_overreported_samples(valid_cnv_reports)
+        # Merge validated CNV reports back with all reports
+        # Keep SNV reports and replace CNV reports with validated ones
+        merged_reports = {
+            name: details for name, details in report_details.items()
+            if details.get('report_type') == 'SNV' or name in valid_cnv_reports
+        }
+        # Get reports with <=2 clinical indications (applies to all report types)
+        filtered_reports = NMDProcessor.filter_overreported_samples(merged_reports)
         # Get reports with no CNV and SNV variants
         no_variant_reports = NMDProcessor.get_reports_with_no_variants(filtered_reports)
         # Get Athena summary reports
