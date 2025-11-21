@@ -241,8 +241,9 @@ class NMDProcessor:
             file_id = file['id']
             file_name = file['describe']['name']
             sample_name = file_name.split('_')[0].strip().lower()
-            raw_content = dxpy.open_dxfile(file_id, mode='rb').read().strip().splitlines()
-            content = [line.decode('utf-8') for line in raw_content]
+            with dxpy.open_dxfile(file_id, mode='rb') as f:
+                raw_content = f.read().strip().splitlines()
+                content = [line.decode('utf-8') for line in raw_content]
             athena_reports[sample_name] = {
                 "file_id": file_id,
                 "content": content
