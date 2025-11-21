@@ -183,11 +183,26 @@ class NMDProcessor:
         dict
             Filtered report details with <=2 clinical indications.
         """
-        counts = Counter(details['clinical_indication'] for details in report_details.values())
-        excluded = {ind for ind, count in counts.items() if count > threshold}
+        # Count distinct clinical indications per sample
+        sample_to_inds = {}
+        for details in report_details.values():
+            sample = details.get("sample")
+            indication = details.get("clinical_indication")
+            if sample is None or indication is None:
+                continue
+            sample_to_inds.setdefault(sample, set()).add(indication)
+
+        # Identify samples with more than the threshold number of indications
+        excluded_samples = {
+            sample for sample, inds in sample_to_inds.items()
+            if len(inds) > threshold
+        }
+
+        # Filter out reports belonging to excluded samples
         return {
-            name: details for name, details in report_details.items()
-            if details['clinical_indication'] not in excluded
+            name: details
+            for name, details in report_details.items()
+            if details.get("sample") not in excluded_samples
         }
 
     @staticmethod
