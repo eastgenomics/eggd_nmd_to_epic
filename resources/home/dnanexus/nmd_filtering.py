@@ -192,13 +192,12 @@ class NMDProcessor:
                 continue
             sample_to_inds.setdefault(sample, set()).add(indication)
 
-        # Identify samples with more than the threshold number of indications
+        # Identify samples with more than threshold and filter out excluded samples
         excluded_samples = {
             sample for sample, inds in sample_to_inds.items()
             if len(inds) > threshold
         }
 
-        # Filter out reports belonging to excluded samples
         return {
             name: details
             for name, details in report_details.items()
