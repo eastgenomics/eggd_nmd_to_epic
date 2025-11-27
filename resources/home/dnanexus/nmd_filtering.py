@@ -4,6 +4,10 @@ import json
 import re
 import pandas as pd
 import io
+from hl7apy.core import Group
+from hl7apy.core import Message
+from hl7apy.consts import VALIDATION_LEVEL
+from datetime import datetime
 from collections import Counter
 
 
@@ -289,6 +293,79 @@ class NMDProcessor:
             final_output.append(output)
         return final_output
 
+    @staticmethod
+    def json_to_hl7(json_list):
+        """
+        Converts a list of JSON report details to HL7 messages.
+        Parameters:
+        json_list : list
+            List of JSON report details.
+        Returns:
+        list
+            List of HL7 messages in ER7 format.
+        """
+        hl7_messages = []
+
+        for idx, record in enumerate(json_list):
+            try:
+                msg = Message("ORU_R01", version="2.5.1", validation_level=VALIDATION_LEVEL.TOLERANT)
+
+                # Create MSH header
+                msg.msh.msh_3 = "EPIC"
+                msg.msh.msh_4 = "Lab"
+                msg.msh.msh_5 = "Athena"
+                msg.msh.msh_6 = "GenomicsLab"
+                msg.msh.msh_7 = datetime.now().strftime("%Y%m%d%H%M%S")
+                msg.msh.msh_9 = "ORU^R01"
+                msg.msh.msh_10 = "MSG12345"
+                msg.msh.msh_11 = "T"
+                msg.msh.msh_12 = "2.5.1"
+
+                # Create PID segment
+                pid = msg.add_segment("PID")
+                pid.pid_3 = record.get("sample", "")
+
+                # Create SPM segment
+                spm = msg.add_segment("SPM")
+                spm.spm_2 = record.get("Epic-SpecimenID", "")
+                spm.spm_3 = record.get("Epic-InstrumentID", "")
+
+                # Create ORC segment
+                orc = msg.add_segment("ORC")
+                orc.orc_4 = record.get("Epic-BatchID", "")
+
+                # Create OBR segment
+                obr = msg.add_segment("OBR")
+                obr.obr_4 = record.get("report_name", "")
+                obr.obr_13 = record.get("clinical_indication", "")
+                obr.obr_24 = record.get("report_type", "")
+                obr.obr_31 = record.get("assay", "")
+
+                # Create OBX for variant data
+                obx_variants = msg.add_segment("OBX")
+                obx_variants.obx_3 = "Variant Genomic details"
+                obx_variants.obx_5 = str(record.get("variants", ""))
+
+                # Create OBX for Athena summary
+                if record.get("athena_summary"):
+                    athena_content = record["athena_summary"].get("content", [])
+                    obx_athena = msg.add_segment("OBX")
+                    obx_athena.obx_3 = "Athena Summary"
+                    obx_athena.obx_5 = "\n".join(athena_content)
+
+                # Added metadata in NTE segment
+                # ZSP didn't work
+                nte = msg.add_segment("NTE")
+                nte.nte_3 = f"Project={record.get('project','')}; FileID={record.get('athena_summary',{}).get('file_id','')}"
+
+                hl7_messages.append(msg.to_er7())
+
+            except Exception as e:
+                print(f"Error generating HL7 message: {e}")
+                hl7_messages.append(None)
+
+        return hl7_messages
+
 # Main processing loop
 all_report_details = {}
 
@@ -340,6 +417,9 @@ def main():
         # Print final output in json format
         for output in final_output:
             print (json.dumps(output, indent = 4))
+            hl7_message = NMDProcessor.json_to_hl7([output])
+            print(hl7_message)
+
 
 if __name__ == "__main__":
     main()
