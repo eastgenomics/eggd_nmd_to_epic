@@ -349,9 +349,10 @@ class NMDProcessor:
                 # Create OBX for Athena summary
                 if record.get("athena_summary"):
                     athena_content = record["athena_summary"].get("content", [])
-                    obx_athena = msg.add_segment("OBX")
-                    obx_athena.obx_3 = "Athena Summary"
-                    obx_athena.obx_5 = "\n".join(athena_content)
+                    if athena_content:
+                        obx_athena = msg.add_segment("OBX")
+                        obx_athena.obx_3 = "Athena Summary"
+                        obx_athena.obx_5 = "\n".join(athena_content)
 
                 # Added metadata in NTE segment
                 # ZSP didn't work
