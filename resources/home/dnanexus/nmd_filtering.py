@@ -295,7 +295,7 @@ class NMDProcessor:
         return final_output
 
     @staticmethod
-    def export_poor_coverage(final_output, tsv_path):
+    def export_low_coverage(final_output, tsv_path):
         """
         Export reports where the panel coverage at 20x is not 100%.
         Parameters
@@ -462,7 +462,7 @@ def main():
         # Create final output
         final_output = NMDProcessor.gather_output(no_variant_reports, athena_reports)
         # Export poor coverage samples (anything <100% panel coverage)
-        NMDProcessor.export_poor_coverage(final_output, tsv_path=f"poor_coverage_{proj['name']}.tsv")
+        NMDProcessor.export_low_coverage(final_output, tsv_path=f"low_coverage_{proj['name']}.tsv")
         # Print final output in json format
         for output in final_output:
             print (json.dumps(output, indent = 4))
