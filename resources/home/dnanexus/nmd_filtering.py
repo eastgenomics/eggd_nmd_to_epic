@@ -4,6 +4,7 @@ import json
 import re
 import pandas as pd
 import io
+import csv
 from hl7apy.core import Group
 from hl7apy.core import Message
 from hl7apy.consts import VALIDATION_LEVEL
@@ -294,6 +295,50 @@ class NMDProcessor:
         return final_output
 
     @staticmethod
+    def export_poor_coverage(final_output, tsv_path):
+        """
+        Export reports where the panel coverage at 20x is not 100%.
+        Parameters
+        ----------
+        final_output : list
+            List of JSON-like report dicts with athena_summary.
+        Returns
+        -------
+        None
+            Writes tsv file with reports having <100% panel coverage.
+        """
+        rows = []
+        for report in final_output:
+            athena_summary = report.get("athena_summary", {})
+            content = athena_summary.get("content", [])
+
+            for line in content:
+                print(f"DEBUG: checking line for {report.get('report_name','unknown')}: {line!r}")
+                if "of this panel was sequenced to a depth of 20x or greater" in line:
+                    # Extract number before % in last line of athena summary
+                    line_norm = " ".join(line.split())  # collapse whitespace
+                    match = re.search(r"(\d+(?:\.\d+)?)\s*%", line_norm)
+                    if match:
+                        coverage = float(match.group(1))
+                        if coverage < 100:
+                            rows.append({
+                                "report_name": report.get("report_name", "unknown"),
+                                "coverage_percent": coverage
+                            })
+                    break
+
+        # Write to tsv file
+        if rows:
+            with open(tsv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["report_name", "coverage_percent"], delimiter="\t")
+                writer.writeheader()
+                writer.writerows(rows)
+
+            print(f"Exported {len(rows)} reports with <100% coverage to {tsv_path}")
+        else:
+            print("All reports have 100% coverage.")
+
+    @staticmethod
     def json_to_hl7(json_list):
         """
         Converts a list of JSON report details to HL7 messages.
@@ -403,9 +448,10 @@ def main():
         # Get CNV reports with no excluded regions
         valid_cnv_reports = NMDProcessor.filter_valid_cnv_reports(cnv_reports)
         # Merge validated CNV reports back with all reports
+        samples_with_valid_cnv = {details['sample'] for details in valid_cnv_reports.values()}
         merged_reports = {
             name: details for name, details in report_details.items()
-            if details.get('report_type') == 'SNV' or name in valid_cnv_reports
+            if details['sample'] in samples_with_valid_cnv
         }
         # Get reports with <=2 clinical indications (applies to all report types)
         filtered_reports = NMDProcessor.filter_overreported_samples(merged_reports)
@@ -415,11 +461,19 @@ def main():
         athena_reports = NMDProcessor.get_athena_report(athena_summary_file)
         # Create final output
         final_output = NMDProcessor.gather_output(no_variant_reports, athena_reports)
+        # Export poor coverage samples (anything <100% panel coverage)
+        NMDProcessor.export_poor_coverage(final_output, tsv_path=f"poor_coverage_{proj['name']}.tsv")
         # Print final output in json format
         for output in final_output:
             print (json.dumps(output, indent = 4))
             hl7_message = NMDProcessor.json_to_hl7([output])
             print(hl7_message)
+        # print how many hl7 messages were made
+        print(f"Generated {len(final_output)} HL7 messages for project {proj['name']}.")
+        # Print how many were cnvs and how many were snvs
+        cnv_count = sum(1 for output in final_output if output['report_type'] == 'CNV')
+        snv_count = sum(1 for output in final_output if output['report_type'] == 'SNV')
+        print(f"CNV reports: {cnv_count}, SNV reports: {snv_count}")
 
 
 if __name__ == "__main__":
