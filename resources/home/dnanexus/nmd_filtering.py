@@ -10,6 +10,7 @@ from hl7apy.core import Message
 from hl7apy.consts import VALIDATION_LEVEL
 from datetime import datetime
 from collections import Counter
+from utils.other_utils import ReportUtils
 
 
 # Define current project as current workspace
@@ -229,33 +230,6 @@ class NMDProcessor:
         }
 
     @staticmethod
-    def get_athena_report(athena_summary_file):
-        """
-        Finds Athena summary files and gets summary information.
-        Parameters
-        ----------
-        athena_summary_file : list
-            List of Athena summary files.
-        Returns
-        -------
-        athena_reports : dict
-            Athena report details.
-        """
-        athena_reports = {}
-        for file in athena_summary_file:
-            file_id = file['id']
-            file_name = file['describe']['name']
-            sample_name = file_name.split('_')[0].strip().lower()
-            with dxpy.open_dxfile(file_id, mode='rb') as f:
-                raw_content = f.read().strip().splitlines()
-                content = [line.decode('utf-8') for line in raw_content]
-            athena_reports[sample_name] = {
-                "file_id": file_id,
-                "content": content
-            }
-        return athena_reports
-
-    @staticmethod
     def gather_output(filtered_reports, athena_reports):
         """
         Generates output by merging reports and matching Athena summaries.
@@ -313,7 +287,7 @@ class NMDProcessor:
             content = athena_summary.get("content", [])
 
             for line in content:
-                print(f"DEBUG: checking line for {report.get('report_name','unknown')}: {line!r}")
+                print(f"Checking line for {report.get('report_name','unknown')}: {line!r}")
                 if "of this panel was sequenced to a depth of 20x or greater" in line:
                     # Extract number before % in last line of athena summary
                     line_norm = " ".join(line.split())  # collapse whitespace
@@ -458,7 +432,7 @@ def main():
         # Get reports with no CNV and SNV variants
         no_variant_reports = NMDProcessor.get_reports_with_no_variants(filtered_reports)
         # Get Athena summary reports
-        athena_reports = NMDProcessor.get_athena_report(athena_summary_file)
+        athena_reports = ReportUtils.get_athena_report(athena_summary_file)
         # Create final output
         final_output = NMDProcessor.gather_output(no_variant_reports, athena_reports)
         # Export poor coverage samples (anything <100% panel coverage)
@@ -466,15 +440,16 @@ def main():
         # Print final output in json format
         for output in final_output:
             print (json.dumps(output, indent = 4))
-            hl7_message = NMDProcessor.json_to_hl7([output])
-            print(hl7_message)
+            hl7_messages = NMDProcessor.json_to_hl7([output])
+            for msg in hl7_messages:
+                # Add new line for each segment in hl7 message for readability
+                print(msg.replace('\r', '\n'))
         # print how many hl7 messages were made
         print(f"Generated {len(final_output)} HL7 messages for project {proj['name']}.")
         # Print how many were cnvs and how many were snvs
         cnv_count = sum(1 for output in final_output if output['report_type'] == 'CNV')
         snv_count = sum(1 for output in final_output if output['report_type'] == 'SNV')
         print(f"CNV reports: {cnv_count}, SNV reports: {snv_count}")
-
 
 if __name__ == "__main__":
     main()
