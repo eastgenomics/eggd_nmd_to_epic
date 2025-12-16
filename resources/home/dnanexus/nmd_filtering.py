@@ -4,11 +4,13 @@ import json
 import re
 import pandas as pd
 import io
+import csv
 from hl7apy.core import Group
 from hl7apy.core import Message
 from hl7apy.consts import VALIDATION_LEVEL
 from datetime import datetime
 from collections import Counter
+from utils.other_utils import ReportUtils
 
 
 # Define current project as current workspace
@@ -228,33 +230,6 @@ class NMDProcessor:
         }
 
     @staticmethod
-    def get_athena_report(athena_summary_file):
-        """
-        Finds Athena summary files and gets summary information.
-        Parameters
-        ----------
-        athena_summary_file : list
-            List of Athena summary files.
-        Returns
-        -------
-        athena_reports : dict
-            Athena report details.
-        """
-        athena_reports = {}
-        for file in athena_summary_file:
-            file_id = file['id']
-            file_name = file['describe']['name']
-            sample_name = file_name.split('_')[0].strip().lower()
-            with dxpy.open_dxfile(file_id, mode='rb') as f:
-                raw_content = f.read().strip().splitlines()
-                content = [line.decode('utf-8') for line in raw_content]
-            athena_reports[sample_name] = {
-                "file_id": file_id,
-                "content": content
-            }
-        return athena_reports
-
-    @staticmethod
     def gather_output(filtered_reports, athena_reports):
         """
         Generates output by merging reports and matching Athena summaries.
@@ -292,6 +267,53 @@ class NMDProcessor:
             }
             final_output.append(output)
         return final_output
+
+    @staticmethod
+    def export_low_coverage(final_output, tsv_path):
+        """
+        Export reports where the panel coverage at 20x is not 100%.
+        Parameters
+        ----------
+        final_output : list
+            List of JSON-like report dicts with athena_summary.
+        Returns
+        -------
+        None
+            Writes tsv file with reports having <100% panel coverage.
+        """
+        rows = []
+        for report in final_output:
+            athena_summary = report.get("athena_summary", {})
+            content = athena_summary.get("content", [])
+
+            for line in content:
+                if "of this panel was sequenced to a depth of 20x or greater" in line:
+                    # Extract number before % in last line of athena summary
+                    line_norm = " ".join(line.split())  # collapse whitespace
+                    match = re.search(r"(\d+(?:\.\d+)?)\s*%", line_norm)
+                    if match:
+                        coverage = float(match.group(1))
+                        if coverage < 100:
+                            rows.append({
+                                "report_name": report.get("report_name", "unknown"),
+                                "coverage_percent": coverage
+                            })
+                    break
+
+        # Write to tsv file
+        if rows:
+            try:
+                with open(tsv_path, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=["report_name", "coverage_percent"], delimiter="\t")
+                    writer.writeheader()
+                    writer.writerows(rows)
+            except IOError as e:
+                print(f"Error writing to {tsv_path}: {e}")
+                raise
+
+            print(f"Exported {len(rows)} reports with <100% coverage to {tsv_path}")
+        else:
+            print("All reports have 100% coverage.")
 
     @staticmethod
     def json_to_hl7(json_list):
@@ -349,9 +371,10 @@ class NMDProcessor:
                 # Create OBX for Athena summary
                 if record.get("athena_summary"):
                     athena_content = record["athena_summary"].get("content", [])
-                    obx_athena = msg.add_segment("OBX")
-                    obx_athena.obx_3 = "Athena Summary"
-                    obx_athena.obx_5 = "\n".join(athena_content)
+                    if athena_content:
+                        obx_athena = msg.add_segment("OBX")
+                        obx_athena.obx_3 = "Athena Summary"
+                        obx_athena.obx_5 = "\n".join(athena_content)
 
                 # Added metadata in NTE segment
                 # ZSP didn't work
@@ -402,24 +425,34 @@ def main():
         # Get CNV reports with no excluded regions
         valid_cnv_reports = NMDProcessor.filter_valid_cnv_reports(cnv_reports)
         # Merge validated CNV reports back with all reports
+        samples_with_valid_cnv = {details['sample'] for details in valid_cnv_reports.values()}
         merged_reports = {
             name: details for name, details in report_details.items()
-            if details.get('report_type') == 'SNV' or name in valid_cnv_reports
+            if details['sample'] in samples_with_valid_cnv
         }
         # Get reports with <=2 clinical indications (applies to all report types)
         filtered_reports = NMDProcessor.filter_overreported_samples(merged_reports)
         # Get reports with no CNV and SNV variants
         no_variant_reports = NMDProcessor.get_reports_with_no_variants(filtered_reports)
         # Get Athena summary reports
-        athena_reports = NMDProcessor.get_athena_report(athena_summary_file)
+        athena_reports = ReportUtils.get_athena_report(athena_summary_file)
         # Create final output
         final_output = NMDProcessor.gather_output(no_variant_reports, athena_reports)
+        # Export poor coverage samples (anything <100% panel coverage)
+        NMDProcessor.export_low_coverage(final_output, tsv_path=f"low_coverage_{proj['name']}.tsv")
         # Print final output in json format
         for output in final_output:
             print (json.dumps(output, indent = 4))
-            hl7_message = NMDProcessor.json_to_hl7([output])
-            print(hl7_message)
-
+            hl7_messages = NMDProcessor.json_to_hl7([output])
+            for msg in hl7_messages:
+                # Add new line for each segment in hl7 message for readability
+                print(msg.replace('\r', '\n'))
+        # print how many hl7 messages were made
+        print(f"Generated {len(final_output)} HL7 messages for project {proj['name']}.")
+        # Print how many were cnvs and how many were snvs
+        cnv_count = sum(1 for output in final_output if output['report_type'] == 'CNV')
+        snv_count = sum(1 for output in final_output if output['report_type'] == 'SNV')
+        print(f"CNV reports: {cnv_count}, SNV reports: {snv_count}")
 
 if __name__ == "__main__":
     main()
