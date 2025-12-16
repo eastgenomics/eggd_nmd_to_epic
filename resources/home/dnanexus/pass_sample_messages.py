@@ -4,10 +4,6 @@ from hl7apy.consts import VALIDATION_LEVEL
 from datetime import datetime
 from utils.other_utils import ReportUtils
 
-# Define current project as current workspace
-current_project_id = dxpy.WORKSPACE_ID
-current_project = dxpy.api.project_describe(current_project_id)
-projects = [current_project]
 
 class PassProcessor:
     """
@@ -145,7 +141,7 @@ class PassProcessor:
 
             # Create PID
             pid = msg.add_segment("PID")
-            sample_str = file.get("sample") or (athena_summary.get("sample_name") if athena_summary else "")
+            sample_str = file.get("sample")
             parts = sample_str.split("-") if sample_str else []
             pid_value = parts[1] if len(parts) > 1 else sample_str or "UNKNOWN"
             pid.pid_3 = pid_value
@@ -179,6 +175,11 @@ class PassProcessor:
             return None
 
 def main():
+    # Define current project as current workspace
+    current_project_id = dxpy.WORKSPACE_ID
+    current_project = dxpy.api.project_describe(current_project_id)
+    projects = [current_project]
+
     for proj in projects:
         snv_reports_files = list(
             dxpy.bindings.search.find_data_objects(
@@ -224,15 +225,15 @@ def main():
 
         if hl7_message:
             # Fix HL7 escape sequences for backslashes (\ is escape character in hl7)
-            hl7_message = hl7_message = hl7_message.replace("\\E\\", "\\")
+            hl7_message = hl7_message.replace("\\E\\", "\\")
             print("HL7 message generated for", filename)
             print(hl7_message.replace('\r', '\n'))
             hl7_count += 1
         else:
             print("No HL7 message for", filename)
 
-        # Print how many hl7 messages were created from count
-        print(f"\nTotal HL7 messages generated: {hl7_count}")
+    # Print how many hl7 messages were created from count
+    print(f"\nTotal HL7 messages generated: {hl7_count}")
 
 if __name__ == "__main__":
     main()

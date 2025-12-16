@@ -287,7 +287,6 @@ class NMDProcessor:
             content = athena_summary.get("content", [])
 
             for line in content:
-                print(f"Checking line for {report.get('report_name','unknown')}: {line!r}")
                 if "of this panel was sequenced to a depth of 20x or greater" in line:
                     # Extract number before % in last line of athena summary
                     line_norm = " ".join(line.split())  # collapse whitespace
@@ -303,10 +302,14 @@ class NMDProcessor:
 
         # Write to tsv file
         if rows:
-            with open(tsv_path, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=["report_name", "coverage_percent"], delimiter="\t")
-                writer.writeheader()
-                writer.writerows(rows)
+            try:
+                with open(tsv_path, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=["report_name", "coverage_percent"], delimiter="\t")
+                    writer.writeheader()
+                    writer.writerows(rows)
+            except IOError as e:
+                print(f"Error writing to {tsv_path}: {e}")
+                raise
 
             print(f"Exported {len(rows)} reports with <100% coverage to {tsv_path}")
         else:
