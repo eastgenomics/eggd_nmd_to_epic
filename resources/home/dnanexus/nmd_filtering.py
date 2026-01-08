@@ -332,56 +332,41 @@ class NMDProcessor:
             try:
                 msg = Message("ORU_R01", version="2.5.1", validation_level=VALIDATION_LEVEL.TOLERANT)
 
-                # Create MSH header
-                msg.msh.msh_3 = "EPIC"
-                msg.msh.msh_4 = "Lab"
-                msg.msh.msh_5 = "Athena"
-                msg.msh.msh_6 = "GenomicsLab"
-                msg.msh.msh_7 = datetime.now().strftime("%Y%m%d%H%M%S")
-                msg.msh.msh_9 = "ORU^R01"
-                msg.msh.msh_10 = "MSG12345"
-                msg.msh.msh_11 = "T"
-                msg.msh.msh_12 = "2.5.1"
+                specimen_id = record.get("Epic-SpecimenID", "")
 
-                # Create PID segment
-                pid = msg.add_segment("PID")
-                pid.pid_3 = record.get("sample", "")
+                # Handle variant data and create OBX segment
+                variants = str(record.get("variants", ""))
+                variant_lines = variants.split("\n")
 
-                # Create SPM segment
-                spm = msg.add_segment("SPM")
-                spm.spm_2 = record.get("Epic-SpecimenID", "")
-                spm.spm_3 = record.get("Epic-InstrumentID", "")
+                for i, line in enumerate(variant_lines, start=1):
+                    obx_variants = msg.add_segment("OBX")
+                    obx_variants.obx_1 = str(i)
+                    obx_variants.obx_2 = "ST"
+                    obx_variants.obx_3 = f"Variant Genomic details^Variant Genomic details^ATHENA^^^^^^{specimen_id}"
+                    obx_variants.obx_5 = line
+                    obx_variants.obx_11 = "F"
 
-                # Create ORC segment
-                orc = msg.add_segment("ORC")
-                orc.orc_4 = record.get("Epic-BatchID", "")
-
-                # Create OBR segment
-                obr = msg.add_segment("OBR")
-                obr.obr_4 = record.get("report_name", "")
-                obr.obr_13 = record.get("clinical_indication", "")
-                obr.obr_24 = record.get("report_type", "")
-                obr.obr_31 = record.get("assay", "")
-
-                # Create OBX for variant data
-                obx_variants = msg.add_segment("OBX")
-                obx_variants.obx_3 = "Variant Genomic details"
-                obx_variants.obx_5 = str(record.get("variants", ""))
-
-                # Create OBX for Athena summary
+                # Handle Athena data and create OBX segment
                 if record.get("athena_summary"):
                     athena_content = record["athena_summary"].get("content", [])
-                    if athena_content:
+                    for i, line in enumerate(athena_content, start=1):
                         obx_athena = msg.add_segment("OBX")
-                        obx_athena.obx_3 = "Athena Summary"
-                        obx_athena.obx_5 = "\n".join(athena_content)
+                        obx_athena.obx_1 = str(i)
+                        obx_athena.obx_2 = "ST"
+                        obx_athena.obx_3 = f"Athena Summary^Athena Summary^ATHENA^^^^^^{specimen_id}"
+                        obx_athena.obx_5 = line
+                        obx_athena.obx_11 = "F"
 
                 # Added metadata in NTE segment
                 # ZSP didn't work
                 nte = msg.add_segment("NTE")
                 nte.nte_3 = f"Project={record.get('project','')}; FileID={record.get('athena_summary',{}).get('file_id','')}"
 
-                hl7_messages.append(msg.to_er7())
+                # ORU_R01 format will make a header (MSH) automatically
+                # so used ER7 format to remove MSH segment
+                raw = msg.to_er7()
+                raw_no_msh = "\n".join( line for line in raw.split("\r") if line.strip() and not line.startswith("MSH") )
+                hl7_messages.append(raw_no_msh)
 
             except Exception as e:
                 print(f"Error generating HL7 message: {e}")
