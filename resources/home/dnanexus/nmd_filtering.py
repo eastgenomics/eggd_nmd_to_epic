@@ -12,7 +12,6 @@ from datetime import datetime
 from collections import Counter
 from utils.other_utils import ReportUtils
 
-
 # Define current project as current workspace
 current_project_id = dxpy.WORKSPACE_ID
 current_project = dxpy.api.project_describe(current_project_id)
@@ -326,12 +325,6 @@ class NMDProcessor:
         list
             List of HL7 messages in ER7 format.
         """
-        def pad_obx_to_24_pipes(line):
-            """Helper function to make each OBX segment with 24 pipes (25 fields) as expected in EPIC."""
-            fields = line.split("|")
-            while len(fields) < 25:
-                fields.append("")
-            return "|".join(fields)
 
         hl7_messages = []
 
@@ -377,7 +370,7 @@ class NMDProcessor:
                     if not line.strip() or line.startswith("MSH"):
                         continue
                     if line.startswith("OBX"):
-                        line = pad_obx_to_24_pipes(line)
+                        line = ReportUtils.pad_obx_to_24_pipes(line)
                     processed_lines.append(line)
 
                 raw_no_msh = "\n".join(processed_lines)
