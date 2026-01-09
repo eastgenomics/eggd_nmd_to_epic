@@ -128,23 +128,7 @@ class PassProcessor:
         try:
             msg = Message("ORU_R01", version="2.5.1", validation_level=VALIDATION_LEVEL.TOLERANT)
 
-            # Create MSH header
-            msg.msh.msh_3 = "EPIC"
-            msg.msh.msh_4 = "Lab"
-            msg.msh.msh_5 = "Athena"
-            msg.msh.msh_6 = "GenomicsLab"
-            msg.msh.msh_7 = datetime.now().strftime("%Y%m%d%H%M%S")
-            msg.msh.msh_9 = "ORU^R01"
-            msg.msh.msh_10 = "MSG12345"
-            msg.msh.msh_11 = "T"
-            msg.msh.msh_12 = "2.5.1"
-
-            # Create PID
-            pid = msg.add_segment("PID")
-            sample_str = file.get("sample")
-            parts = sample_str.split("-") if sample_str else []
-            pid_value = parts[1] if len(parts) > 1 else sample_str or "UNKNOWN"
-            pid.pid_3 = pid_value
+            specimen_id = file.get("sample", "")
 
             # Create NTE with directory path based on project name
             base_path = ""
@@ -157,22 +141,63 @@ class PassProcessor:
             cleaned_project_name = project_name.replace("002_", "") if project_name else ""
             directory_path = f"{base_path}\\{cleaned_project_name}"
 
+            # OBX segments for Athena summary
+            content_lines = athena_summary.get("content", []) if athena_summary else []
+            content_lines = [line.strip() for line in content_lines if line.strip()]
+
+            for i, line in enumerate(content_lines, start=1):
+                obx = msg.add_segment("OBX")
+                obx.obx_1 = str(i)
+                obx.obx_2 = "TX"
+                obx.obx_3 = f"Athena Summary^Athena Summary^ATHENA^^^^^^{specimen_id}"
+                obx.obx_5 = line
+                obx.obx_11 = "F"
+            # Add NTE segment after OBX segments
             nte = msg.add_segment("NTE")
             nte.nte_3 = directory_path
 
-            # Create OBX for Athena summary
-            obx = msg.add_segment("OBX")
-            obx.obx_2 = "TX"
-            obx.obx_3 = "Athena Summary"
-            content_lines = athena_summary.get("content", []) if athena_summary else []
-            content_lines = [line.strip() for line in content_lines if line.strip()]
-            obx.obx_5 = "\n".join(content_lines) if content_lines else ""
+            raw = msg.to_er7()
 
-            return msg.to_er7()
+            processed_lines = []
+            for line in raw.split("\r"):
+                if not line.strip() or line.startswith("MSH"):
+                    continue
+                if line.startswith("OBX"):
+                    line = ReportUtils.pad_obx_to_24_pipes(line)
+                processed_lines.append(line)
+
+            return "\n".join(processed_lines)
 
         except Exception as e:
             print(f"Error generating HL7 message: {e}")
             return None
+
+    @staticmethod
+    def write_pass_hl7_file(final_output, all_hl7_messages, directory="."):
+        """
+        Writes all PASS HL7 messages into:
+        <Epic-BatchID>_<project>_pass_samples.txt
+        """
+
+        if not final_output:
+            raise ValueError("final_output is empty.")
+
+        batch_id = final_output[0].get("Epic-BatchID", "UNKNOWNBATCH")
+        project = final_output[0].get("project_name", "UNKNOWNPROJECT")
+
+        filename = f"{batch_id}_{project}_pass_samples.txt"
+        filepath = f"{directory}/{filename}"
+
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                for msg in all_hl7_messages:
+                    if msg:
+                        f.write(msg + "\n\n")
+            return filepath
+
+        except IOError as e:
+            print(f"Error writing PASS HL7 file {filepath}: {e}")
+            raise
 
 def main():
     # Define current project as current workspace
@@ -212,6 +237,7 @@ def main():
     # Merge into final output
     final_pass_output = PassProcessor.gather_all_outputs(filtered_reports, athena_reports)
     # Generate HL7 message for each pass sample
+    all_hl7_messages = []
     hl7_count = 0
     for output in final_pass_output:
         filename = output["report_name"]
@@ -228,9 +254,15 @@ def main():
             hl7_message = hl7_message.replace("\\E\\", "\\")
             print("HL7 message generated for", filename)
             print(hl7_message.replace('\r', '\n'))
+            # Add to all messages list
+            all_hl7_messages.append(hl7_message)
             hl7_count += 1
         else:
             print("No HL7 message for", filename)
+
+    # Write all HL7 messages to file
+    filepath = PassProcessor.write_pass_hl7_file(final_pass_output, all_hl7_messages)
+    print(f"PASS HL7 file written to: {filepath}")
 
     # Print how many hl7 messages were created from count
     print(f"\nTotal HL7 messages generated: {hl7_count}")
