@@ -177,6 +177,18 @@ class PassProcessor:
         """
         Writes all PASS HL7 messages into:
         <Epic-BatchID>_<project>_pass_samples.txt
+        Parameters
+        ----------
+        final_output : list
+            Final merged output list.
+        all_hl7_messages : list
+            List of HL7 messages.
+        directory : str
+            Directory to write the file to.
+        Returns
+        -------
+        filepath : str
+            Path to the written HL7 file.
         """
 
         if not final_output:
