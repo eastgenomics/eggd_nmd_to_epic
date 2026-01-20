@@ -32,3 +32,10 @@ class ReportUtils:
                 "content": content
             }
         return athena_reports
+
+    def pad_obx_to_24_pipes(line):
+        """Helper function to make each OBX segment with 24 pipes (25 fields) as expected in EPIC."""
+        fields = line.split("|")
+        while len(fields) < 25:
+            fields.append("")
+        return "|".join(fields)

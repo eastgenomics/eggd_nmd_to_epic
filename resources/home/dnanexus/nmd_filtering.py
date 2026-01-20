@@ -12,7 +12,6 @@ from datetime import datetime
 from collections import Counter
 from utils.other_utils import ReportUtils
 
-
 # Define current project as current workspace
 current_project_id = dxpy.WORKSPACE_ID
 current_project = dxpy.api.project_describe(current_project_id)
@@ -326,68 +325,108 @@ class NMDProcessor:
         list
             List of HL7 messages in ER7 format.
         """
+
         hl7_messages = []
 
         for idx, record in enumerate(json_list):
             try:
                 msg = Message("ORU_R01", version="2.5.1", validation_level=VALIDATION_LEVEL.TOLERANT)
 
-                # Create MSH header
-                msg.msh.msh_3 = "EPIC"
-                msg.msh.msh_4 = "Lab"
-                msg.msh.msh_5 = "Athena"
-                msg.msh.msh_6 = "GenomicsLab"
-                msg.msh.msh_7 = datetime.now().strftime("%Y%m%d%H%M%S")
-                msg.msh.msh_9 = "ORU^R01"
-                msg.msh.msh_10 = "MSG12345"
-                msg.msh.msh_11 = "T"
-                msg.msh.msh_12 = "2.5.1"
+                specimen_id = record.get("Epic-SpecimenID", "")
+                # Increment set id for each message continuously
+                set_id = 0
 
-                # Create PID segment
-                pid = msg.add_segment("PID")
-                pid.pid_3 = record.get("sample", "")
+                # Handle variant data and create OBX segment
+                variants = str(record.get("variants", ""))
+                variant_lines = variants.split("\n")
 
-                # Create SPM segment
-                spm = msg.add_segment("SPM")
-                spm.spm_2 = record.get("Epic-SpecimenID", "")
-                spm.spm_3 = record.get("Epic-InstrumentID", "")
+                for line in variant_lines:
+                    set_id += 1
+                    obx_variants = msg.add_segment("OBX")
+                    obx_variants.obx_1 = str(set_id)
+                    obx_variants.obx_2 = "ST"
+                    obx_variants.obx_3 = f"Variant Genomic details^Variant Genomic details^ATHENA^^^^^^{specimen_id}"
+                    obx_variants.obx_5 = line
+                    obx_variants.obx_11 = "F"
 
-                # Create ORC segment
-                orc = msg.add_segment("ORC")
-                orc.orc_4 = record.get("Epic-BatchID", "")
-
-                # Create OBR segment
-                obr = msg.add_segment("OBR")
-                obr.obr_4 = record.get("report_name", "")
-                obr.obr_13 = record.get("clinical_indication", "")
-                obr.obr_24 = record.get("report_type", "")
-                obr.obr_31 = record.get("assay", "")
-
-                # Create OBX for variant data
-                obx_variants = msg.add_segment("OBX")
-                obx_variants.obx_3 = "Variant Genomic details"
-                obx_variants.obx_5 = str(record.get("variants", ""))
-
-                # Create OBX for Athena summary
+                # Handle Athena data and create OBX segment
                 if record.get("athena_summary"):
                     athena_content = record["athena_summary"].get("content", [])
-                    if athena_content:
+                    for line in athena_content:
+                        set_id += 1
                         obx_athena = msg.add_segment("OBX")
-                        obx_athena.obx_3 = "Athena Summary"
-                        obx_athena.obx_5 = "\n".join(athena_content)
+                        obx_athena.obx_1 = str(set_id)
+                        obx_athena.obx_2 = "ST"
+                        obx_athena.obx_3 = f"Athena Summary^Athena Summary^ATHENA^^^^^^{specimen_id}"
+                        obx_athena.obx_5 = line
+                        obx_athena.obx_11 = "F"
 
                 # Added metadata in NTE segment
                 # ZSP didn't work
                 nte = msg.add_segment("NTE")
                 nte.nte_3 = f"Project={record.get('project','')}; FileID={record.get('athena_summary',{}).get('file_id','')}"
 
-                hl7_messages.append(msg.to_er7())
+                # ORU_R01 format will make a header (MSH) automatically
+                # so used ER7 format to remove MSH segment
+                raw = msg.to_er7()
+                processed_lines = []
+                for line in raw.split("\r"):
+                    if not line.strip() or line.startswith("MSH"):
+                        continue
+                    if line.startswith("OBX"):
+                        line = ReportUtils.pad_obx_to_24_pipes(line)
+                    processed_lines.append(line)
+
+                raw_no_msh = "\n".join(processed_lines)
+                hl7_messages.append(raw_no_msh)
 
             except Exception as e:
                 print(f"Error generating HL7 message: {e}")
                 hl7_messages.append(None)
 
         return hl7_messages
+
+    @staticmethod
+    def write_hl7_file(final_output, all_hl7_messages, directory="."):
+        """
+        Writes all HL7 messages for a run into a single file named:
+        <Epic-BatchID>_<project>_NMDs.txt
+
+        Parameters
+        ----------
+        final_output : list
+            List of JSON-like report dicts (each containing Epic-BatchID and project).
+        all_hl7_messages : list
+            List of HL7 message strings (already generated by json_to_hl7).
+        directory : str
+            Directory to write the file into (default: current directory).
+
+        Returns
+        -------
+        str
+            Path to the written HL7 file.
+        """
+
+        if not final_output:
+            raise ValueError("final_output is empty — cannot determine batch/project for filename.")
+
+        # Use the first record to determine run-level metadata
+        batch_id = final_output[0].get("Epic-BatchID", "UNKNOWNBATCH")
+        project = final_output[0].get("project", "UNKNOWNPROJECT")
+
+        filename = f"{batch_id}_{project}_NMDs.txt"
+        filepath = f"{directory}/{filename}"
+
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                for msg in all_hl7_messages:
+                    if msg:
+                        f.write(msg + "\n\n")
+            return filepath
+
+        except IOError as e:
+            print(f"Error writing HL7 file {filepath}: {e}")
+            raise
 
 # Main processing loop
 all_report_details = {}
@@ -441,14 +480,23 @@ def main():
         # Export poor coverage samples (anything <100% panel coverage)
         NMDProcessor.export_low_coverage(final_output, tsv_path=f"low_coverage_{proj['name']}.tsv")
         # Print final output in json format
+        all_hl7_messages = []
         for output in final_output:
             print (json.dumps(output, indent = 4))
             hl7_messages = NMDProcessor.json_to_hl7([output])
+            all_hl7_messages.extend(hl7_messages)
+
             for msg in hl7_messages:
                 # Add new line for each segment in hl7 message for readability
                 print(msg.replace('\r', '\n'))
+
+        # Make .txt file with all hl7 messages for the run
+        filepath = NMDProcessor.write_hl7_file(final_output, all_hl7_messages)
+        print(f"Run-level HL7 written to: {filepath}")
+
         # print how many hl7 messages were made
         print(f"Generated {len(final_output)} HL7 messages for project {proj['name']}.")
+
         # Print how many were cnvs and how many were snvs
         cnv_count = sum(1 for output in final_output if output['report_type'] == 'CNV')
         snv_count = sum(1 for output in final_output if output['report_type'] == 'SNV')
