@@ -333,14 +333,17 @@ class NMDProcessor:
                 msg = Message("ORU_R01", version="2.5.1", validation_level=VALIDATION_LEVEL.TOLERANT)
 
                 specimen_id = record.get("Epic-SpecimenID", "")
+                # Increment set id for each message continuously
+                set_id = 0
 
                 # Handle variant data and create OBX segment
                 variants = str(record.get("variants", ""))
                 variant_lines = variants.split("\n")
 
-                for i, line in enumerate(variant_lines, start=1):
+                for line in variant_lines:
+                    set_id += 1
                     obx_variants = msg.add_segment("OBX")
-                    obx_variants.obx_1 = str(i)
+                    obx_variants.obx_1 = str(set_id)
                     obx_variants.obx_2 = "ST"
                     obx_variants.obx_3 = f"Variant Genomic details^Variant Genomic details^ATHENA^^^^^^{specimen_id}"
                     obx_variants.obx_5 = line
@@ -349,9 +352,10 @@ class NMDProcessor:
                 # Handle Athena data and create OBX segment
                 if record.get("athena_summary"):
                     athena_content = record["athena_summary"].get("content", [])
-                    for i, line in enumerate(athena_content, start=1):
+                    for line in athena_content:
+                        set_id += 1
                         obx_athena = msg.add_segment("OBX")
-                        obx_athena.obx_1 = str(i)
+                        obx_athena.obx_1 = str(set_id)
                         obx_athena.obx_2 = "ST"
                         obx_athena.obx_3 = f"Athena Summary^Athena Summary^ATHENA^^^^^^{specimen_id}"
                         obx_athena.obx_5 = line
